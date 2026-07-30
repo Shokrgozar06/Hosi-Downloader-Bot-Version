@@ -1,106 +1,96 @@
-import json
 import os
-import asyncio
-from pyrogram import Client, filters
-from pyrogram.types import Message
+import telebot
 import static_ffmpeg
 import yt_dlp
 
-# تنظیم خودکار مسیرهای FFmpeg برای تبدیل‌های صوتی
+# Automatically setup FFmpeg paths
 static_ffmpeg.add_paths()
 
-CONFIG_FILE = 'config.json'
 DOWNLOAD_DIR = 'temp_downloads'
-
-# مطمئن می‌شویم پوشه موقت دانلود وجود دارد
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-def load_config():
-    """Load settings from JSON file if available."""
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {'format': 'bestaudio/best', 'choice_code': '5', 'is_audio_only': True}
+# Retrieve BOT_TOKEN from environment variables or set it directly
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8643780189:AAHHrzfft00QxbHSLZuGp5UFlqFrIaPLjtA")
 
-# دریافت اطلاعات از متغیرهای محیطی یا مقادیر پیش‌فرض
-API_ID = int(os.environ.get("API_ID", "1234567"))  # جایگزین با API_ID خودتان
-API_HASH = os.environ.get("API_HASH", "YOUR_API_HASH")
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN")
+bot = telebot.TeleBot(BOT_TOKEN)
 
-app = Client("media_downloader_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
-
-def download_media_file(url, config, message_id):
-    is_audio = config.get('is_audio_only', True)
-    
-    # مسیردهی ایمن داخل پوشه temp_downloads
+def download_media_file(url, message_id):
     outtmpl = os.path.join(DOWNLOAD_DIR, f"{message_id}_%(title)s.%(ext)s")
         
     ydl_opts = {
-        'format': config.get('format', 'bestaudio/best'),
+        'format': 'bestaudio/best',
         'outtmpl': outtmpl,
         'ignoreerrors': True,
-        'max_filesize': 50 * 1024 * 1024,  # محدودیت ۵۰ مگابایتی تلگرام
-    }
-    
-    if is_audio:
-        ydl_opts['postprocessors'] = [{
+        'max_filesize': 50 * 1024 * 1024,  # Telegram's 50MB limit
+        'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
             'preferredquality': '192',
-        }]
+        }],
+    }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
         filename = ydl.prepare_filename(info)
         
-        # اگر فایل به mp3 تبدیل شده باشد، پسوند را اصلاح می‌کنیم
-        if is_audio:
-            base_path = os.path.splitext(filename)[0]
-            mp3_path = base_path + ".mp3"
-            if os.path.exists(mp3_path):
-                return mp3_path
-                
+        # Adjust file extension after MP3 conversion
+        base_path = os.path.splitext(filename)[0]
+        mp3_path = base_path + ".mp3"
+        if os.path.exists(mp3_path):
+            return mp3_path
+            
         return filename
 
-@app.on_message(filters.command("start"))
-async def start_cmd(client: Client, message: Message):
-    await message.reply_text("سلام! لینک ویدیو یا موزیک را بفرستید تا برایتان دانلود کنم.")
+@bot.message_handler(commands=['start', 'help'])
+def send_welcome(message):
+    bot.reply_to(
+        message, 
+        "Welcome! Send me a link to a video or music (YouTube, SoundCloud, etc.) and I will download it for you."
+    )
 
-@app.on_message(filters.text & ~filters.command(["start", "help"]))
-async def handle_download(client: Client, message: Message):
+@bot.message_handler(func=lambda message: True)
+def handle_message(message):
     url = message.text.strip()
     
     if not url.startswith("http"):
-        await message.reply_text("لطفاً یک لینک معتبر وارد کنید.")
+        bot.reply_to(message, "Please provide a valid URL.")
         return
 
-    status_msg = await message.reply_text("⏳ در حال بررسی لینک و دانلود...")
-    config = load_config()
-    loop = asyncio.get_event_loop()
+    status_msg = bot.reply_to(message, "⏳ Processing link and downloading...")
     file_path = None
 
     try:
-        # اجرای دانلود در thread جداگانه برای جلوگیری از قفل شدن ربات
-        file_path = await loop.run_in_executor(None, download_media_file, url, config, message.id)
+        file_path = download_media_file(url, message.message_id)
 
         if not file_path or not os.path.exists(file_path):
-            await status_msg.edit_text("❌ دانلود ناموفق بود یا حجم فایل بیشتر از ۵۰ مگابایت است.")
+            bot.edit_message_text(
+                "❌ Download failed or file size exceeds Telegram's 50MB limit.", 
+                chat_id=status_msg.chat.id, 
+                message_id=status_msg.message_id
+            )
             return
 
-        await status_msg.edit_text("⬆️ در حال آپلود فایل به تلگرام...")
+        bot.edit_message_text(
+            "⬆️ Uploading to Telegram...", 
+            chat_id=status_msg.chat.id, 
+            message_id=status_msg.message_id
+        )
         
-        if config.get('is_audio_only', True):
-            await message.reply_audio(audio=file_path, caption="خدمت شما! 🎧")
-        else:
-            await message.reply_video(video=file_path, caption="خدمت شما! 🎬")
+        with open(file_path, 'rb') as audio_file:
+            bot.send_audio(message.chat.id, audio_file, caption="Here is your audio file! 🎧")
             
-        await status_msg.delete()
+        bot.delete_message(chat_id=status_msg.chat.id, message_id=status_msg.message_id)
 
     except Exception as e:
-        await status_msg.edit_text(f"❌ خطا در پردازش:\n`{str(e)[:150]}`")
+        bot.edit_message_text(
+            f"❌ Error occurred:\n`{str(e)[:150]}`", 
+            chat_id=status_msg.chat.id, 
+            message_id=status_msg.message_id, 
+            parse_mode="Markdown"
+        )
 
     finally:
-        # پاکسازی فایل پس از ارسال
+        # Cleanup temporary downloaded file
         if file_path and os.path.exists(file_path):
             try:
                 os.remove(file_path)
@@ -109,4 +99,4 @@ async def handle_download(client: Client, message: Message):
 
 if __name__ == "__main__":
     print("Bot is running...")
-    app.run()
+    bot.infinity_polling()
