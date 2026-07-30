@@ -17,8 +17,8 @@ def handle_message(message):
 
     user_data[message.chat.id] = url
 
-    # بررسی اینکه آیا لینک مربوط به پلی‌لیست است یا خیر
-    if "playlist" in url or "list=" in url:
+    # ارسال پیش‌نمایش و اطلاعات پلی‌لیست در صورت وجود
+    if "playlist" in url or "list=" in url or "album" in url:
         send_playlist_info(message.chat.id, url)
 
     markup = types.InlineKeyboardMarkup(row_width=2)
@@ -31,32 +31,34 @@ def handle_message(message):
     bot.send_message(message.chat.id, "لطفاً کیفیت یا نوع دانلود را انتخاب کنید:", reply_markup=markup)
 
 def send_playlist_info(chat_id, url):
-    """استخراج مشخصات و کاور پلی‌لیست و ارسال آن قبل از دانلود"""
-    bot.send_message(chat_id, "در حال دریافت اطلاعات پلی‌لیست...")
+    """استخراج مشخصات کلی پلی‌لیست قبل از شروع دانلود"""
+    bot.send_message(chat_id, "در حال دریافت اطلاعات پلی‌لیست/آلبوم...")
     
     ydl_opts = {
-        'extract_flat': True,  # فقط دریافت متادیتا بدون دانلود فایل‌ها
+        'extract_flat': True,
         'skip_download': True,
+        'ignoreerrors': True,
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-            
+            if not info:
+                return
+
             title = info.get('title', 'نامشخص')
             uploader = info.get('uploader', info.get('channel', 'نامشخص'))
             entries = info.get('entries', [])
-            total_tracks = len(list(entries)) if entries else 0
+            total_tracks = len(list(entries)) if entries else 1
             
-            # دریافت کاور پلی‌لیست یا اولین ویدیو
             thumbnails = info.get('thumbnails', [])
             thumb_url = thumbnails[-1]['url'] if thumbnails else None
 
             caption = (
-                f"📋 **اطلاعات پلی‌لیست**\n\n"
+                f"📋 **اطلاعات آلبوم / پلی‌لیست**\n\n"
                 f"📌 **عنوان:** {title}\n"
                 f"👤 **سازنده:** {uploader}\n"
-                f"🔢 **تعداد ترک‌ها:** {total_tracks} عدد"
+                f"🔢 **تعداد:** {total_tracks} ترک"
             )
 
             if thumb_url:
@@ -65,7 +67,7 @@ def send_playlist_info(chat_id, url):
                 bot.send_message(chat_id, caption, parse_mode="Markdown")
 
     except Exception as e:
-        bot.send_message(chat_id, f"خطا در دریافت اطلاعات پلی‌لیست: {str(e)}")
+        bot.send_message(chat_id, f"خطا در دریافت اطلاعات اولیه: {str(e)}")
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_inline(call):
@@ -76,13 +78,25 @@ def callback_inline(call):
         bot.answer_callback_query(call.id, "لینک یافت نشد! لطفاً دوباره لینک را ارسال کنید.")
         return
 
-    bot.answer_callback_query(call.id, "در حال پردازش درخواست...")
-    bot.edit_message_text("در حال دانلود، لطفاً صبر کنید...", chat_id=chat_id, message_id=call.message.message_id)
+    bot.answer_callback_query(call.id, "دانلود شروع شد...")
+    status_msg = bot.send_message(chat_id, "🚀 شروع پردازش و دانلود تک‌به‌تک...")
+
+    # هوک اختصاصی برای ارسال لحظه‌ای فایل به محض پایان دانلود هر ترک
+    def my_hook(d):
+        if d['status'] == 'finished':
+            filepath = d['filename']
+            # اگر فرمت اولیه تبدیل شده باشد، مسیر فایل را تصحیح می‌کند
+            if call.data == "audio_mp3":
+                base, _ = os.path.splitext(filepath)
+                filepath = base + ".mp3"
+            
+            upload_single_file(chat_id, filepath, call.data)
 
     if call.data == "audio_mp3":
         ydl_opts = {
             'format': 'bestaudio/best',
-            'writethumbnail': True,  # دانلود کاور
+            'writethumbnail': True,
+            'ignoreerrors': True,
             'postprocessors': [
                 {
                     'key': 'FFmpegExtractAudio',
@@ -90,13 +104,14 @@ def callback_inline(call):
                     'preferredquality': '192',
                 },
                 {
-                    'key': 'EmbedThumbnail',  # تزریق کاور به درون فایل MP3
+                    'key': 'EmbedThumbnail',
                 },
                 {
-                    'key': 'FFmpegMetadata',  # تزریق عنوان، خواننده و متادیتا
+                    'key': 'FFmpegMetadata',
                 }
             ],
             'outtmpl': 'downloads/%(title)s.%(ext)s',
+            'progress_hooks': [my_hook],
         }
     else:
         height_map = {
@@ -110,48 +125,43 @@ def callback_inline(call):
             'format': f'bestvideo[height<={max_h}][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
             'outtmpl': 'downloads/%(title)s.%(ext)s',
             'merge_output_format': 'mp4',
+            'ignoreerrors': True,
+            'progress_hooks': [my_hook],
         }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            
-            # در صورتی که لینک یک پلی‌لیست باشد
-            if 'entries' in info:
-                for entry in info['entries']:
-                    process_and_send_file(chat_id, ydl, entry, call.data)
-            else:
-                process_and_send_file(chat_id, ydl, info, call.data)
+            ydl.download([url])
+
+        bot.send_message(chat_id, "✅ دانلود و ارسال تمام فایل‌ها با موفقیت به پایان رسید.")
 
     except Exception as e:
-        bot.send_message(chat_id, f"خطا در دانلود: {str(e)}")
+        bot.send_message(chat_id, f"خطا در پروسه دانلود: {str(e)}")
 
-def process_and_send_file(chat_id, ydl, info, download_type):
-    """ارسال فایل دانلود شده به تلگرام و پاکسازی آن"""
-    filename = ydl.prepare_filename(info)
+def upload_single_file(chat_id, filepath, download_type):
+    """ارسال تک‌به‌تک فایل بلافاصله پس از دانلود و حذف آن از سرور"""
+    if not os.path.exists(filepath):
+        # بررسی پسوند در صورت تغییر نام توسط ffmpeg
+        base, _ = os.path.splitext(filepath)
+        if os.path.exists(base + ".mp3"):
+            filepath = base + ".mp3"
+        elif os.path.exists(base + ".mp4"):
+            filepath = base + ".mp4"
+        else:
+            return
 
-    if download_type == "audio_mp3":
-        filename = os.path.splitext(filename)[0] + ".mp3"
-        if os.path.exists(filename):
-            with open(filename, 'rb') as audio:
-                bot.send_audio(
-                    chat_id, 
-                    audio, 
-                    title=info.get('title'), 
-                    performer=info.get('uploader')
-                )
-    else:
-        if not filename.endswith('.mp4'):
-            base, _ = os.path.splitext(filename)
-            if os.path.exists(base + '.mp4'):
-                filename = base + '.mp4'
-
-        if os.path.exists(filename):
-            with open(filename, 'rb') as video:
+    try:
+        if download_type == "audio_mp3":
+            with open(filepath, 'rb') as audio:
+                bot.send_audio(chat_id, audio)
+        else:
+            with open(filepath, 'rb') as video:
                 bot.send_video(chat_id, video, supports_streaming=True)
-
-    # پاکسازی فایل پس از ارسال
-    if os.path.exists(filename):
-        os.remove(filename)
+    except Exception as e:
+        bot.send_message(chat_id, f"خطا در ارسال فایل: {str(e)}")
+    finally:
+        # حذف آنی فایل برای خالی ماندن فضای سرور
+        if os.path.exists(filepath):
+            os.remove(filepath)
 
 bot.infinity_polling()
