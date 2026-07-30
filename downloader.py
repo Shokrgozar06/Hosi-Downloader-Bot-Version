@@ -1,102 +1,86 @@
 import os
 import telebot
-import static_ffmpeg
+from telebot import types
 import yt_dlp
 
-# Automatically setup FFmpeg paths
-static_ffmpeg.add_paths()
-
-DOWNLOAD_DIR = 'temp_downloads'
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-
-# Retrieve BOT_TOKEN from environment variables or set it directly
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8643780189:AAHHrzfft00QxbHSLZuGp5UFlqFrIaPLjtA")
-
+BOT_TOKEN = "8643780189:AAHHrzfft00QxbHSLZuGp5UFlqFrIaPLjtA"
 bot = telebot.TeleBot(BOT_TOKEN)
 
-def download_media_file(url, message_id):
-    outtmpl = os.path.join(DOWNLOAD_DIR, f"{message_id}_%(title)s.%(ext)s")
-        
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'outtmpl': outtmpl,
-        'ignoreerrors': True,
-        'max_filesize': 50 * 1024 * 1024,  # Telegram's 50MB limit
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-    }
-
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        filename = ydl.prepare_filename(info)
-        
-        # Adjust file extension after MP3 conversion
-        base_path = os.path.splitext(filename)[0]
-        mp3_path = base_path + ".mp3"
-        if os.path.exists(mp3_path):
-            return mp3_path
-            
-        return filename
-
-@bot.message_handler(commands=['start', 'help'])
-def send_welcome(message):
-    bot.reply_to(
-        message, 
-        "Welcome! Send me a link to a video or music (YouTube, SoundCloud, etc.) and I will download it for you."
-    )
+# ذخیره موقت لینک‌ها
+user_data = {}
 
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     url = message.text.strip()
-    
-    if not url.startswith("http"):
-        bot.reply_to(message, "Please provide a valid URL.")
+    if not (url.startswith("http://") or url.startswith("https://")):
+        bot.reply_to(message, "لطفاً یک لینک معتبر ارسال کنید.")
         return
 
-    status_msg = bot.reply_to(message, "⏳ Processing link and downloading...")
-    file_path = None
+    # ذخیره لینک ارسال شده توسط کاربر
+    user_data[message.chat.id] = url
 
+    # ساخت منوی شیشه‌ای
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn_high = types.InlineKeyboardButton("🎥 کیفیت 1080p", callback_data="quality_1080")
+    btn_mid = types.InlineKeyboardButton("🎥 کیفیت 720p", callback_data="quality_720")
+    btn_low = types.InlineKeyboardButton("🎥 کیفیت 480p", callback_data="quality_480")
+    btn_audio = types.InlineKeyboardButton("🎵 دانلود به صورت موزیک (MP3)", callback_data="audio_mp3")
+
+    markup.add(btn_high, btn_mid, btn_low, btn_audio)
+
+    bot.send_message(message.chat.id, "لطفاً کیفیت یا نوع دانلود را انتخاب کنید:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: True)
+def callback_inline(call):
+    chat_id = call.message.chat.id
+    url = user_data.get(chat_id)
+
+    if not url:
+        bot.answer_callback_query(call.id, "لینک یافت نشد! لطفاً دوباره لینک را ارسال کنید.")
+        return
+
+    bot.answer_callback_query(call.id, "در حال پردازش درخواست...")
+    bot.edit_message_text("در حال دانلود، لطفاً صبر کنید...", chat_id=chat_id, message_id=call.message.message_id)
+
+    # تنظیمات yt-dlp بر اساس دکمه انتخاب شده
+    ydl_opts = {}
+    
+    if call.data == "audio_mp3":
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'outtmpl': 'downloads/%(title)s.%(ext)s',
+        }
+    elif call.data == "quality_1080":
+        ydl_opts = {'format': 'bestvideo[height<=1080]+bestaudio/best', 'outtmpl': 'downloads/%(title)s.%(ext)s'}
+    elif call.data == "quality_720":
+        ydl_opts = {'format': 'bestvideo[height<=720]+bestaudio/best', 'outtmpl': 'downloads/%(title)s.%(ext)s'}
+    elif call.data == "quality_480":
+        ydl_opts = {'format': 'bestvideo[height<=480]+bestaudio/best', 'outtmpl': 'downloads/%(title)s.%(ext)s'}
+
+    # اجرای دانلود و ارسال فایل
     try:
-        file_path = download_media_file(url, message.message_id)
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
 
-        if not file_path or not os.path.exists(file_path):
-            bot.edit_message_text(
-                "❌ Download failed or file size exceeds Telegram's 50MB limit.", 
-                chat_id=status_msg.chat.id, 
-                message_id=status_msg.message_id
-            )
-            return
+            if call.data == "audio_mp3":
+                filename = os.path.splitext(filename)[0] + ".mp3"
+                with open(filename, 'rb') as audio:
+                    bot.send_audio(chat_id, audio)
+            else:
+                with open(filename, 'rb') as video:
+                    bot.send_video(chat_id, video)
 
-        bot.edit_message_text(
-            "⬆️ Uploading to Telegram...", 
-            chat_id=status_msg.chat.id, 
-            message_id=status_msg.message_id
-        )
-        
-        with open(file_path, 'rb') as audio_file:
-            bot.send_audio(message.chat.id, audio_file, caption="Here is your audio file! 🎧")
-            
-        bot.delete_message(chat_id=status_msg.chat.id, message_id=status_msg.message_id)
+            # پاک‌سازی فایل دانلود شده بعد از ارسال
+            if os.path.exists(filename):
+                os.remove(filename)
 
     except Exception as e:
-        bot.edit_message_text(
-            f"❌ Error occurred:\n`{str(e)[:150]}`", 
-            chat_id=status_msg.chat.id, 
-            message_id=status_msg.message_id, 
-            parse_mode="Markdown"
-        )
+        bot.send_message(chat_id, f"خطا در دانلود: {str(e)}")
 
-    finally:
-        # Cleanup temporary downloaded file
-        if file_path and os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-            except Exception:
-                pass
-
-if __name__ == "__main__":
-    print("Bot is running...")
-    bot.infinity_polling()
+bot.infinity_polling()
