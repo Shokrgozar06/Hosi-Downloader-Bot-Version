@@ -1,10 +1,10 @@
 import os
 import telebot
-import static_ffmpeg
+#import static_ffmpeg
 import yt_dlp
 
 # Automatically setup FFmpeg paths
-static_ffmpeg.add_paths()
+#static_ffmpeg.add_paths()
 
 DOWNLOAD_DIR = 'temp_downloads'
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
