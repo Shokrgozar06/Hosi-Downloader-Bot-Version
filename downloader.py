@@ -1,6 +1,6 @@
 import os
 import telebot
-#import static_ffmpeg
+import static_ffmpeg
 import yt_dlp
 
 # Automatically setup FFmpeg paths
