@@ -5,7 +5,7 @@ from telebot import types
 import yt_dlp
 from mutagen.id3 import ID3, APIC, error
 
-BOT_TOKEN = "YOUR_BOT_TOKEN"
+BOT_TOKEN = "8643780189:AAHHrzfft00QxbHSLZuGp5UFlqFrIaPLjtA"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 user_data = {}
