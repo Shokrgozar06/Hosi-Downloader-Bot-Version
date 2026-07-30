@@ -5,7 +5,7 @@ from telebot import types
 import yt_dlp
 from mutagen.id3 import ID3, APIC, error
 
-BOT_TOKEN = "8643780189:AAHHrzfft00QxbHSLZuGp5UFlqFrIaPLjtA"
+BOT_TOKEN = "YOUR_BOT_TOKEN"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 user_data = {}
@@ -19,7 +19,6 @@ def handle_message(message):
 
     user_data[message.chat.id] = url
 
-    # بررسی لینک پلی‌لیست/آلبوم و ارسال مشخصات همراه با کاور
     if "playlist" in url or "list=" in url or "album" in url:
         send_playlist_info(message.chat.id, url)
 
@@ -53,12 +52,11 @@ def send_playlist_info(chat_id, url):
             entries = info.get('entries', [])
             total_tracks = len(list(entries)) if entries else 1
             
-            # یافتن بهترین کیفیت کاور پلی‌لیست
             thumb_url = info.get('thumbnail')
             if not thumb_url and entries:
-                # استفاده از کاور اولین ترک در صورت نبود کاور کلی
                 first_entry = list(entries)[0]
-                thumb_url = first_entry.get('thumbnail')
+                if isinstance(first_entry, dict):
+                    thumb_url = first_entry.get('thumbnail')
 
             caption = (
                 f"📋 **اطلاعات آلبوم / پلی‌لیست**\n\n"
@@ -93,7 +91,7 @@ def embed_cover_art(mp3_path, thumb_path):
                 APIC(
                     encoding=3,
                     mime='image/jpeg',
-                    type=3, # 3 یعنی کاور آلبوم (Front Cover)
+                    type=3,
                     desc=u'Cover',
                     data=albumart.read()
                 )
@@ -112,13 +110,12 @@ def callback_inline(call):
         return
 
     bot.answer_callback_query(call.id, "دانلود شروع شد...")
-    bot.send_message(chat_id, "🚀 شروع پردازش و دانلود تک‌به‌تک...")
+    bot.send_message(chat_id, "🚀 شروع پردازش و دانلود...")
 
-    # تنظیمات yt-dlp
     if call.data == "audio_mp3":
         ydl_opts = {
             'format': 'bestaudio/best',
-            'writethumbnail': True, # دانلود کاور به‌صورت فایل جداگانه کنار موزیک
+            'writethumbnail': True,
             'ignoreerrors': True,
             'postprocessors': [
                 {
@@ -152,68 +149,78 @@ def callback_inline(call):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             
-            # در صورت وجود چندین آیتم (پلی‌لیست)
-            if 'entries' in info and info['entries']:
-                for entry in info['entries']:
-                    if entry:
-                        process_file_and_send(chat_id, ydl, entry, call.data)
-            else:
-                process_file_and_send(chat_id, ydl, info, call.data)
+            if info is not None:
+                if 'entries' in info and info['entries']:
+                    for entry in info['entries']:
+                        if entry:
+                            process_file_and_send(chat_id, ydl, entry, call.data)
+                else:
+                    process_file_and_send(chat_id, ydl, info, call.data)
 
-        bot.send_message(chat_id, "✅ دانلود و ارسال تمامی فایل‌ها به پایان رسید.")
+        bot.send_message(chat_id, "✅ پروسه دانلود به پایان رسید.")
 
     except Exception as e:
-        bot.send_message(chat_id, f"خطا در دانلود: {str(e)}")
+        bot.send_message(chat_id, f"خطا در پروسه دانلود: {str(e)}")
 
 def process_file_and_send(chat_id, ydl, entry, download_type):
-    """پردازش متادیتا، تزریق کاور و ارسال تک‌به‌تک فایل"""
+    """پردازش، ارسال و پاکسازی قطعی فایل از روی سرور حتی در صورت بروز خطا"""
     base_name = ydl.prepare_filename(entry)
     base_no_ext, _ = os.path.splitext(base_name)
 
-    if download_type == "audio_mp3":
-        mp3_file = base_no_ext + ".mp3"
-        
-        # پیدا کردن عکس کاور دانلود شده (ممكن است jpg یا webp یا png باشد)
-        thumb_file = None
-        for ext in ['.jpg', '.png', '.webp', '.jpeg']:
-            if os.path.exists(base_no_ext + ext):
-                thumb_file = base_no_ext + ext
-                break
+    files_to_delete = []
 
-        if os.path.exists(mp3_file):
-            # اگر فایل کاور پیدا شد، آن را به داخل فایل MP3 تزریق کن
-            if thumb_file:
-                embed_cover_art(mp3_file, thumb_file)
+    try:
+        if download_type == "audio_mp3":
+            mp3_file = base_no_ext + ".mp3"
+            files_to_delete.append(mp3_file)
+            
+            thumb_file = None
+            for ext in ['.jpg', '.png', '.webp', '.jpeg']:
+                t_path = base_no_ext + ext
+                if os.path.exists(t_path):
+                    thumb_file = t_path
+                    files_to_delete.append(t_path)
+                    break
 
-            with open(mp3_file, 'rb') as audio:
-                # اگر کاور جداگانه هم وجود داشت، آن را هم در پارامتر thumb به تلگرام بده
-                if thumb_file and os.path.exists(thumb_file):
-                    with open(thumb_file, 'rb') as t_img:
+            if os.path.exists(mp3_file):
+                if thumb_file:
+                    embed_cover_art(mp3_file, thumb_file)
+
+                with open(mp3_file, 'rb') as audio:
+                    if thumb_file and os.path.exists(thumb_file):
+                        with open(thumb_file, 'rb') as t_img:
+                            bot.send_audio(
+                                chat_id, 
+                                audio, 
+                                title=entry.get('title'), 
+                                performer=entry.get('uploader'),
+                                thumb=t_img
+                            )
+                    else:
                         bot.send_audio(
                             chat_id, 
                             audio, 
                             title=entry.get('title'), 
-                            performer=entry.get('uploader'),
-                            thumb=t_img
+                            performer=entry.get('uploader')
                         )
-                else:
-                    bot.send_audio(
-                        chat_id, 
-                        audio, 
-                        title=entry.get('title'), 
-                        performer=entry.get('uploader')
-                    )
+        else:
+            mp4_file = base_no_ext + ".mp4"
+            files_to_delete.append(mp4_file)
+            
+            if os.path.exists(mp4_file):
+                with open(mp4_file, 'rb') as video:
+                    bot.send_video(chat_id, video, supports_streaming=True)
 
-            # پاکسازی فایل موزیک و عکس
-            os.remove(mp3_file)
-            if thumb_file and os.path.exists(thumb_file):
-                os.remove(thumb_file)
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ خطا در ارسال فایل `{entry.get('title', 'نامشخص')}`: {str(e)}")
 
-    else:
-        mp4_file = base_no_ext + ".mp4"
-        if os.path.exists(mp4_file):
-            with open(mp4_file, 'rb') as video:
-                bot.send_video(chat_id, video, supports_streaming=True)
-            os.remove(mp4_file)
+    finally:
+        # بلاک finally تحت هر شرایطی (چه موفقیت چه خطا) اجرا می‌شود و فایل‌ها را پاک می‌کند
+        for fpath in files_to_delete:
+            if os.path.exists(fpath):
+                try:
+                    os.remove(fpath)
+                except Exception as del_err:
+                    print(f"Error removing file {fpath}: {del_err}")
 
 bot.infinity_polling()
