@@ -5,7 +5,7 @@ import telebot
 from telebot import types
 import yt_dlp
 
-BOT_TOKEN = os.getenv("8643780189:AAHHrzfft00QxbHSLZuGp5UFlqFrIaPLjtA")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable not set!")
 
