@@ -1,3 +1,5 @@
 pyTelegramBotAPI
 yt-dlp
 static-ffmpeg
+imageio-ffmpeg
+python-dotenv
