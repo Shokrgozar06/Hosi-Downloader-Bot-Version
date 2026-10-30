@@ -26,7 +26,7 @@ logger = logging.getLogger("DownloaderBot")
 
 load_dotenv()
 
-BOT_TOKEN = os.getenv("BOT_TOKEN") or "9171992034:AAE8bJ6US1VBp8oEgUV6OJRljip7VT551ns"
+BOT_TOKEN = "0"
 if not BOT_TOKEN:
     logger.error("BOT_TOKEN environment variable not set! Please check your .env file.")
     raise ValueError("BOT_TOKEN یافت نشد! لطفاً فایل .env را تنظیم کنید.")
