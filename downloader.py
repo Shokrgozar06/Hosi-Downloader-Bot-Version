@@ -26,7 +26,7 @@ logger = logging.getLogger("DownloaderBot")
 
 load_dotenv()
 
-BOT_TOKEN = "0"
+BOT_TOKEN = os.getenv("BOT_TOKEN") or "9171992034:AAE8bJ6US1VBp8oEgUV6OJRljip7VT551ns"
 if not BOT_TOKEN:
     logger.error("BOT_TOKEN environment variable not set! Please check your .env file.")
     raise ValueError("BOT_TOKEN یافت نشد! لطفاً فایل .env را تنظیم کنید.")
@@ -34,6 +34,35 @@ if not BOT_TOKEN:
 # Increase Telegram network timeouts to prevent aborted write connections on slow networks
 telebot.apihelper.READ_TIMEOUT = 300
 telebot.apihelper.CONNECT_TIMEOUT = 60
+
+# ----------------------------------------------------
+# Local Telegram Bot API Server Configuration (Up to 2GB)
+# ----------------------------------------------------
+LOCAL_BOT_API_URL = os.getenv("LOCAL_BOT_API_URL", "http://localhost:8081").strip().rstrip("/")
+
+def is_local_bot_api_available(url):
+    if not url:
+        return False
+    try:
+        import urllib.request
+        import urllib.error
+        req = urllib.request.Request(url)
+        urllib.request.urlopen(req, timeout=1.5)
+        return True
+    except urllib.error.HTTPError:
+        # If server responds with 400 or 404, the local bot-api server IS listening!
+        return True
+    except Exception:
+        return False
+
+if is_local_bot_api_available(LOCAL_BOT_API_URL):
+    telebot.apihelper.API_URL = f"{LOCAL_BOT_API_URL}/bot{{0}}/{{1}}"
+    telebot.apihelper.FILE_URL = f"{LOCAL_BOT_API_URL}/file/bot{{0}}/{{1}}"
+    MAX_FILE_SIZE = 1950 * 1024 * 1024  # 1950 MB (approx 2 GB limit)
+    logger.info(f"Connected to Local Telegram Bot API at {LOCAL_BOT_API_URL}! Max upload limit increased to 2000 MB (2 GB).")
+else:
+    MAX_FILE_SIZE = 49.5 * 1024 * 1024  # Standard Telegram 50MB ceiling
+    logger.info("Using standard Telegram Bot API (50 MB upload limit).")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -132,11 +161,28 @@ def resolve_cookies_for_platform(platform: str, ydl_opts: dict):
         ydl_opts['cookiesfrombrowser'] = (BROWSER_COOKIES,)
         logger.info(f"Using direct browser cookies from '{BROWSER_COOKIES}' for {platform}")
 
+def configure_ydl_base_options(ydl_opts: dict, platform: str = "general"):
+    """
+    اعمال تنظیمات پایه و پایدار برای yt-dlp:
+    1. فعال‌سازی دانلود خودکار چالش‌های جاوااسکریپتی یوتیوب (EJS solver)
+    2. شناسایی ران‌تایم‌های مختلف جاوااسکریپت (Node.js, Deno, Bun)
+    3. تنظیم خودکار مسیر FFmpeg
+    4. اتصال هوشمند کوکی‌ها
+    """
+    ydl_opts['remote_components'] = ['ejs:github']
+    ydl_opts['js_runtimes'] = ['deno', 'node', 'quickjs', 'bun']
+
+    if FFMPEG_PATH:
+        ydl_opts['ffmpeg_location'] = FFMPEG_PATH
+    elif FFMPEG_DIR:
+        ydl_opts['ffmpeg_location'] = FFMPEG_DIR
+
+    resolve_cookies_for_platform(platform, ydl_opts)
+
 # ----------------------------------------------------
 # Concurrency & System Limits
 # ----------------------------------------------------
 MAX_CONCURRENT_DOWNLOADS = 3       # Resource optimization limit
-MAX_FILE_SIZE = 49.5 * 1024 * 1024 # Telegram 50MB file size ceiling
 MAX_PLAYLIST_ITEMS = 15            # Avoid server bandwidth starvation
 
 executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_DOWNLOADS)
@@ -227,9 +273,9 @@ STRINGS = {
         "already_downloading": "⏳ این فایل در حال حاضر در حال دانلود است. لطفاً شکیبا باشید.",
         "expired_link": "⚠️ این لینک منقضی شده است. لطفاً مجدداً لینک را ارسال کنید.",
         "file_too_large": (
-            "⚠️ **حجم فایل ({size_mb:.1f} مگابایت) بیشتر از سقف مجاز تلگرام (۵۰ مگابایت) است.**\n\n"
+            "⚠️ **حجم فایل ({size_mb:.1f} مگابایت) بیشتر از سقف مجاز تلگرام ({limit_mb} مگابایت) است.**\n\n"
             "📌 نام فایل: `{title}`\n"
-            "💡 برای ربات‌های معمولی تلگرام ارسال فایل بالای ۵۰ مگ مقدور نیست. لطفاً کیفیت پایین‌تر یا فرمت صوتی را انتخاب کنید."
+            "💡 لطفاً کیفیت پایین‌تر یا فرمت صوتی را انتخاب کنید."
         ),
         "file_not_found": "❌ فایل نهایی یافت نشد.",
         "process_complete": "✅ پروسه دانلود و ارسال به پایان رسید.",
@@ -280,9 +326,9 @@ STRINGS = {
         "already_downloading": "⏳ This download is already in progress. Please wait.",
         "expired_link": "⚠️ This link has expired. Please send the link again.",
         "file_too_large": (
-            "⚠️ **File size ({size_mb:.1f} MB) exceeds Telegram's limit (50 MB).**\n\n"
+            "⚠️ **File size ({size_mb:.1f} MB) exceeds Telegram's limit ({limit_mb} MB).**\n\n"
             "📌 Title: `{title}`\n"
-            "💡 Telegram bots cannot send files larger than 50MB. Please choose a lower resolution or audio mode."
+            "💡 Please choose a lower resolution or audio mode."
         ),
         "file_not_found": "❌ Final downloaded file was not found.",
         "process_complete": "✅ Download and delivery complete.",
@@ -428,7 +474,7 @@ def analyze_and_show_options(chat_id, original_msg_id, status_msg_id, url, lang)
         'socket_timeout': 30,
         'retries': 5,
     }
-    resolve_cookies_for_platform(platform, ydl_opts)
+    configure_ydl_base_options(ydl_opts, platform)
 
     info = None
     try:
@@ -545,7 +591,7 @@ def send_playlist_info(chat_id, url, lang):
         'ignoreerrors': True,
         'socket_timeout': 20,
     }
-    resolve_cookies_for_platform(platform, ydl_opts)
+    configure_ydl_base_options(ydl_opts, platform)
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -671,10 +717,11 @@ def process_file_and_send(chat_id, task_temp_dir, entry, call_action, lang):
 
     if file_size > MAX_FILE_SIZE:
         size_mb = file_size / (1024 * 1024)
-        logger.warning(f"File exceeds 50MB ceiling: {size_mb:.2f} MB. Sending warning.")
+        limit_mb = int(MAX_FILE_SIZE / (1024 * 1024))
+        logger.warning(f"File exceeds {limit_mb}MB limit: {size_mb:.2f} MB. Sending warning.")
         bot.send_message(
             chat_id,
-            get_text(lang, "file_too_large").format(size_mb=size_mb, title=title),
+            get_text(lang, "file_too_large").format(size_mb=size_mb, limit_mb=limit_mb, title=title),
             parse_mode="Markdown"
         )
         try:
@@ -774,10 +821,17 @@ def download_task(call, url, original_msg_id, call_action, lang):
                     fmt = (
                         f'bestvideo[height<={target_h}][ext=mp4]+bestaudio[ext=m4a]/'
                         f'bestvideo[height<={target_h}]+bestaudio/'
-                        f'best[height<={target_h}]/best'
+                        f'best[height<={target_h}]/'
+                        f'bv*[height<={target_h}]+ba/b[height<={target_h}]/'
+                        f'bv*+ba/b'
                     )
                 else:
-                    fmt = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best'
+                    fmt = (
+                        'bestvideo[ext=mp4]+bestaudio[ext=m4a]/'
+                        'bestvideo+bestaudio/'
+                        'best/'
+                        'bv*+ba/b'
+                    )
 
             ydl_opts = {
                 'format': fmt,
@@ -797,12 +851,7 @@ def download_task(call, url, original_msg_id, call_action, lang):
         if "/video/" in url.lower():
             ydl_opts['noplaylist'] = True
 
-        if FFMPEG_PATH:
-            ydl_opts['ffmpeg_location'] = FFMPEG_PATH
-        elif FFMPEG_DIR:
-            ydl_opts['ffmpeg_location'] = FFMPEG_DIR
-
-        resolve_cookies_for_platform(platform, ydl_opts)
+        configure_ydl_base_options(ydl_opts, platform)
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
