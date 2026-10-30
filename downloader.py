@@ -44,14 +44,13 @@ def is_local_bot_api_available(url):
     if not url:
         return False
     try:
-        import urllib.request
-        import urllib.error
-        req = urllib.request.Request(url)
-        urllib.request.urlopen(req, timeout=1.5)
-        return True
-    except urllib.error.HTTPError:
-        # If server responds with 400 or 404, the local bot-api server IS listening!
-        return True
+        from urllib.parse import urlparse
+        import socket
+        parsed = urlparse(url)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or 8081
+        with socket.create_connection((host, port), timeout=1.5):
+            return True
     except Exception:
         return False
 
@@ -170,7 +169,7 @@ def configure_ydl_base_options(ydl_opts: dict, platform: str = "general"):
     4. اتصال هوشمند کوکی‌ها
     """
     ydl_opts['remote_components'] = ['ejs:github']
-    ydl_opts['js_runtimes'] = ['deno', 'node', 'quickjs', 'bun']
+    ydl_opts['js_runtimes'] = {'deno': {}, 'node': {}, 'quickjs': {}, 'bun': {}}
 
     if FFMPEG_PATH:
         ydl_opts['ffmpeg_location'] = FFMPEG_PATH
